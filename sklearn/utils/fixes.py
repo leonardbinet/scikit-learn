@@ -256,3 +256,13 @@ def _joblib_parallel_args(**kwargs):
         if require == 'sharedmem':
             args['backend'] = 'threading'
     return args
+
+
+if np_version < (1, 8):
+    def partition(a, kth, axis=-1):
+        # The k argument is ingored.
+        # the implementation is a lot slower than partition unfortunately
+        return np.sort(a, axis=axis)
+
+else:
+    from numpy import partition
