@@ -9,6 +9,7 @@
 from collections import defaultdict
 import itertools
 import array
+from operator import itemgetter
 import warnings
 
 import numpy as np
@@ -843,9 +844,10 @@ class MultiLabelBinarizer(BaseEstimator, TransformerMixin):
         using a one-hot aka one-of-K scheme.
     """
 
-    def __init__(self, classes=None, sparse_output=False):
+    def __init__(self, classes=None, sparse_output=False, with_scores=False):
         self.classes = classes
         self.sparse_output = sparse_output
+        self.with_scores = with_scores
 
     def fit(self, y):
         """Fit the label sets binarizer, storing `classes_`
@@ -861,6 +863,8 @@ class MultiLabelBinarizer(BaseEstimator, TransformerMixin):
         -------
         self : returns this MultiLabelBinarizer instance
         """
+        if self.with_scores:
+            y = [map(itemgetter(0), vector) for vector in y]
         self._cached_dict = None
         if self.classes is None:
             classes = sorted(set(itertools.chain.from_iterable(y)))
@@ -968,6 +972,29 @@ class MultiLabelBinarizer(BaseEstimator, TransformerMixin):
         indices = array.array('i')
         indptr = array.array('i', [0])
         unknown = set()
+
+        for labels in y:
+            if self.with_scores:
+                # for probabilities: list instead of set, because order matters
+                r_indices = list()
+                for label in labels:
+                    try:
+                        r_indices.append(class_mapping[label[0]])
+                    except KeyError:
+                        unknown.add(label)
+                indptr.append(len(indices))
+            if unknown:
+                warnings.warn('unknown class(es) {0} will be ignored'
+                              .format(sorted(unknown, key=str)))
+
+            data = []
+            for vector in y:
+                data += [label[1] for label in vector]
+            data = np.array(data)
+
+            return sp.csr_matrix((data, indices, indptr),
+                                 shape=(len(indptr) - 1, len(class_mapping)))
+
         for labels in y:
             index = set()
             for label in labels:
@@ -1004,14 +1031,30 @@ class MultiLabelBinarizer(BaseEstimator, TransformerMixin):
         if yt.shape[1] != len(self.classes_):
             raise ValueError('Expected indicator for {0} classes, but got {1}'
                              .format(len(self.classes_), yt.shape[1]))
+        if self.with_scores:
+            allowed_target_types = ('multilabel-indicator', 'continuous-multioutput')
+        else:
+            allowed_target_types = ('multilabel-indicator', 'binary')
+        type_of_target_y = type_of_target(yt)
+        if type_of_target_y not in allowed_target_types:
+            raise ValueError(
+                'Supported target types are: {}. Got {!r} instead.'.format(
+                    allowed_target_types, type_of_target_y))
 
         if sp.issparse(yt):
             yt = yt.tocsr()
+            if self.with_scores:
+                return [
+                    tuple(zip(self.classes_.take(yt.indices[start:end]), yt.data[start:end]))
+                    for start, end in zip(yt.indptr[:-1], yt.indptr[1:])
+                ]
             if len(yt.data) != 0 and len(np.setdiff1d(yt.data, [0, 1])) > 0:
                 raise ValueError('Expected only 0s and 1s in label indicator.')
             return [tuple(self.classes_.take(yt.indices[start:end]))
                     for start, end in zip(yt.indptr[:-1], yt.indptr[1:])]
         else:
+            if self.with_scores:
+                np.setdiff1d
             unexpected = np.setdiff1d(yt, [0, 1])
             if len(unexpected) > 0:
                 raise ValueError('Expected only 0s and 1s in label indicator. '
